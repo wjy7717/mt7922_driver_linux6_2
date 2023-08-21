@@ -12,8 +12,8 @@ default:
 install:
 	su -c "cp -v $(SDIR)/mt76.ko $(DEST)/"
 	su -c "cp -v $(SDIR)/mt76-connac-lib.ko $(DEST)/"
-	su -c "cp -v $(SDIR)/mt7921/mt7921-common.ko $(DEST)/"
-	su -c "cp -v $(SDIR)/mt7921/mt7921e.ko $(DEST)/"
+	su -c "cp -v $(SDIR)/mt7921/mt7921-common.ko $(DEST)/mt7921/"
+	su -c "cp -v $(SDIR)/mt7921/mt7921e.ko $(DEST)/mt7921/"
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(SDIR) clean
