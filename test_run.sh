@@ -1,7 +1,6 @@
 #!/bin/sh
 
-#rmmod mt7921e mt7921-common mt76-connac-lib mt76
-
+rmmod mt7921e mt7921-common mt76-connac-lib mt76
 modprobe mac80211
 insmod mt76/mt76.ko
 insmod mt76/mt76-connac-lib.ko

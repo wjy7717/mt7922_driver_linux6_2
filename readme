@@ -2,10 +2,7 @@ MT7922 driver for redmibook pro 15
 
 
 1.Setup a build environment
-
-	sudo apt install build-essential 
-
-	sudo apt install linux-headers-$(uname -r)
+	sudo apt install build-essential linux-headers-$(uname -r)
 
 2.Build driver
 	make
@@ -13,3 +10,5 @@ MT7922 driver for redmibook pro 15
 3.Test
 	sudo ./test_run.sh
 	
+4.install
+	make install
