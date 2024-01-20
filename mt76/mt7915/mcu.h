@@ -278,6 +278,7 @@ enum {
 	MCU_WA_PARAM_PDMA_RX = 0x04,
 	MCU_WA_PARAM_CPU_UTIL = 0x0b,
 	MCU_WA_PARAM_RED = 0x0e,
+	MCU_WA_PARAM_RED_SETTING = 0x40,
 };
 
 enum mcu_mmps_mode {
@@ -494,10 +495,14 @@ enum {
 	SER_RECOVER
 };
 
-#define MT7915_MAX_BEACON_SIZE		512
-#define MT7915_MAX_INBAND_FRAME_SIZE	256
-#define MT7915_MAX_BSS_OFFLOAD_SIZE	(MT7915_MAX_BEACON_SIZE +	  \
-					 MT7915_MAX_INBAND_FRAME_SIZE +	  \
+#define MT7915_MAX_BEACON_SIZE		1308
+#define MT7915_BEACON_UPDATE_SIZE	(sizeof(struct sta_req_hdr) +	\
+					 sizeof(struct bss_info_bcn) +	\
+					 sizeof(struct bss_info_bcn_cntdwn) +	\
+					 sizeof(struct bss_info_bcn_mbss) +	\
+					 MT_TXD_SIZE +	\
+					 sizeof(struct bss_info_bcn_cont))
+#define MT7915_MAX_BSS_OFFLOAD_SIZE	(MT7915_MAX_BEACON_SIZE +	\
 					 MT7915_BEACON_UPDATE_SIZE)
 
 #define MT7915_BSS_UPDATE_MAX_SIZE	(sizeof(struct sta_req_hdr) +	\
@@ -509,12 +514,6 @@ enum {
 					 sizeof(struct bss_info_he) +	\
 					 sizeof(struct bss_info_bmc_rate) +\
 					 sizeof(struct bss_info_ext_bss))
-
-#define MT7915_BEACON_UPDATE_SIZE	(sizeof(struct sta_req_hdr) +	\
-					 sizeof(struct bss_info_bcn_cntdwn) + \
-					 sizeof(struct bss_info_bcn_mbss) + \
-					 sizeof(struct bss_info_bcn_cont) + \
-					 sizeof(struct bss_info_inband_discovery))
 
 static inline s8
 mt7915_get_power_bound(struct mt7915_phy *phy, s8 txpower)

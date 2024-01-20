@@ -9,6 +9,27 @@
 #define HE_PREP(f, m, v)	le16_encode_bits(le32_get_bits(v, MT_CRXV_HE_##m),\
 						 IEEE80211_RADIOTAP_HE_##f)
 
+void mt76_connac_gen_ppe_thresh(u8 *he_ppet, int nss)
+{
+	static const u8 ppet16_ppet8_ru3_ru0[] = { 0x1c, 0xc7, 0x71 };
+	u8 i, ppet_bits, ppet_size, ru_bit_mask = 0x7; /* HE80 */
+
+	he_ppet[0] = FIELD_PREP(IEEE80211_PPE_THRES_NSS_MASK, nss - 1) |
+		     FIELD_PREP(IEEE80211_PPE_THRES_RU_INDEX_BITMASK_MASK,
+				ru_bit_mask);
+
+	ppet_bits = IEEE80211_PPE_THRES_INFO_PPET_SIZE *
+		    nss * hweight8(ru_bit_mask) * 2;
+	ppet_size = DIV_ROUND_UP(ppet_bits, 8);
+
+	for (i = 0; i < ppet_size - 1; i++)
+		he_ppet[i + 1] = ppet16_ppet8_ru3_ru0[i % 3];
+
+	he_ppet[i + 1] = ppet16_ppet8_ru3_ru0[i % 3] &
+			 (0xff >> (8 - (ppet_bits - 1) % 8));
+}
+EXPORT_SYMBOL_GPL(mt76_connac_gen_ppe_thresh);
+
 int mt76_connac_pm_wake(struct mt76_phy *phy, struct mt76_connac_pm *pm)
 {
 	struct mt76_dev *dev = phy->dev;
@@ -128,23 +149,6 @@ void mt76_connac_tx_complete_skb(struct mt76_dev *mdev,
 	if (!e->txwi) {
 		dev_kfree_skb_any(e->skb);
 		return;
-	}
-
-	/* error path */
-	if (e->skb == DMA_DUMMY_DATA) {
-		struct mt76_connac_txp_common *txp;
-		struct mt76_txwi_cache *t;
-		u16 token;
-
-		txp = mt76_connac_txwi_to_txp(mdev, e->txwi);
-		if (is_mt76_fw_txp(mdev))
-			token = le16_to_cpu(txp->fw.token);
-		else
-			token = le16_to_cpu(txp->hw.msdu_id[0]) &
-				~MT_MSDU_ID_VALID;
-
-		t = mt76_token_put(mdev, token);
-		e->skb = t ? t->skb : NULL;
 	}
 
 	if (e->skb)
@@ -267,11 +271,29 @@ int mt76_connac_init_tx_queues(struct mt76_phy *phy, int idx, int n_desc,
 }
 EXPORT_SYMBOL_GPL(mt76_connac_init_tx_queues);
 
+#define __bitrate_mask_check(_mcs, _mode)				\
+({									\
+	u8 i = 0;							\
+	for (nss = 0; i < ARRAY_SIZE(mask->control[band]._mcs); i++) {	\
+		if (!mask->control[band]._mcs[i])			\
+			continue;					\
+		if (hweight16(mask->control[band]._mcs[i]) == 1) {	\
+			mode = MT_PHY_TYPE_##_mode;			\
+			rateidx = ffs(mask->control[band]._mcs[i]) - 1;	\
+			if (mode == MT_PHY_TYPE_HT)			\
+				rateidx += 8 * i;			\
+			else						\
+				nss = i + 1;				\
+			goto out;					\
+		}							\
+	}								\
+})
+
 u16 mt76_connac2_mac_tx_rate_val(struct mt76_phy *mphy,
 				 struct ieee80211_vif *vif,
 				 bool beacon, bool mcast)
 {
-	u8 mode = 0, band = mphy->chandef.chan->band;
+	u8 nss = 0, mode = 0, band = mphy->chandef.chan->band;
 	int rateidx = 0, mcast_rate;
 
 	if (!vif)
@@ -286,19 +308,12 @@ u16 mt76_connac2_mac_tx_rate_val(struct mt76_phy *mphy,
 		struct cfg80211_bitrate_mask *mask;
 
 		mask = &vif->bss_conf.beacon_tx_rate;
-		if (hweight16(mask->control[band].he_mcs[0]) == 1) {
-			rateidx = ffs(mask->control[band].he_mcs[0]) - 1;
-			mode = MT_PHY_TYPE_HE_SU;
-			goto out;
-		} else if (hweight16(mask->control[band].vht_mcs[0]) == 1) {
-			rateidx = ffs(mask->control[band].vht_mcs[0]) - 1;
-			mode = MT_PHY_TYPE_VHT;
-			goto out;
-		} else if (hweight8(mask->control[band].ht_mcs[0]) == 1) {
-			rateidx = ffs(mask->control[band].ht_mcs[0]) - 1;
-			mode = MT_PHY_TYPE_HT;
-			goto out;
-		} else if (hweight32(mask->control[band].legacy) == 1) {
+
+		__bitrate_mask_check(he_mcs, HE_SU);
+		__bitrate_mask_check(vht_mcs, VHT);
+		__bitrate_mask_check(ht_mcs, HT);
+
+		if (hweight32(mask->control[band].legacy) == 1) {
 			rateidx = ffs(mask->control[band].legacy) - 1;
 			goto legacy;
 		}
@@ -314,9 +329,9 @@ legacy:
 	rateidx = mt76_calculate_default_rate(mphy, rateidx);
 	mode = rateidx >> 8;
 	rateidx &= GENMASK(7, 0);
-
 out:
-	return FIELD_PREP(MT_TX_RATE_IDX, rateidx) |
+	return FIELD_PREP(MT_TX_RATE_NSS, nss) |
+	       FIELD_PREP(MT_TX_RATE_IDX, rateidx) |
 	       FIELD_PREP(MT_TX_RATE_MODE, mode);
 }
 EXPORT_SYMBOL_GPL(mt76_connac2_mac_tx_rate_val);
@@ -463,6 +478,7 @@ void mt76_connac2_mac_write_txwi(struct mt76_dev *dev, __le32 *txwi,
 				    BSS_CHANGED_BEACON_ENABLED));
 	bool inband_disc = !!(changed & (BSS_CHANGED_UNSOL_BCAST_PROBE_RESP |
 					 BSS_CHANGED_FILS_DISCOVERY));
+	bool amsdu_en = wcid->amsdu;
 
 	if (vif) {
 		struct mt76_vif *mvif = (struct mt76_vif *)vif->drv_priv;
@@ -489,9 +505,9 @@ void mt76_connac2_mac_write_txwi(struct mt76_dev *dev, __le32 *txwi,
 		q_idx = wmm_idx * MT76_CONNAC_MAX_WMM_SETS +
 			mt76_connac_lmac_mapping(skb_get_queue_mapping(skb));
 
-		/* counting non-offloading skbs */
-		wcid->stats.tx_bytes += skb->len;
-		wcid->stats.tx_packets++;
+		/* mt7915 WA only counts WED path */
+		if (is_mt7915(dev) && mtk_wed_device_active(&dev->mmio.wed))
+			wcid->stats.tx_packets++;
 	}
 
 	val = FIELD_PREP(MT_TXD0_TX_BYTES, skb->len + sz_txd) |
@@ -522,12 +538,14 @@ void mt76_connac2_mac_write_txwi(struct mt76_dev *dev, __le32 *txwi,
 	txwi[4] = 0;
 
 	val = FIELD_PREP(MT_TXD5_PID, pid);
-	if (pid >= MT_PACKET_ID_FIRST)
+	if (pid >= MT_PACKET_ID_FIRST) {
 		val |= MT_TXD5_TX_STATUS_HOST;
+		amsdu_en = amsdu_en && !is_mt7921(dev);
+	}
 
 	txwi[5] = cpu_to_le32(val);
 	txwi[6] = 0;
-	txwi[7] = wcid->amsdu ? cpu_to_le32(MT_TXD7_HW_AMSDU) : 0;
+	txwi[7] = amsdu_en ? cpu_to_le32(MT_TXD7_HW_AMSDU) : 0;
 
 	if (is_8023)
 		mt76_connac2_mac_write_txwi_8023(txwi, skb, wcid);
@@ -574,15 +592,26 @@ bool mt76_connac2_mac_fill_txs(struct mt76_dev *dev, struct mt76_wcid *wcid,
 	txs = le32_to_cpu(txs_data[0]);
 
 	/* PPDU based reporting */
-	if (FIELD_GET(MT_TXS0_TXS_FORMAT, txs) > 1) {
+	if (mtk_wed_device_active(&dev->mmio.wed) &&
+	    FIELD_GET(MT_TXS0_TXS_FORMAT, txs) > 1) {
 		stats->tx_bytes +=
-			le32_get_bits(txs_data[5], MT_TXS5_MPDU_TX_BYTE);
-		stats->tx_packets +=
-			le32_get_bits(txs_data[5], MT_TXS5_MPDU_TX_CNT);
+			le32_get_bits(txs_data[5], MT_TXS5_MPDU_TX_BYTE) -
+			le32_get_bits(txs_data[7], MT_TXS7_MPDU_RETRY_BYTE);
 		stats->tx_failed +=
 			le32_get_bits(txs_data[6], MT_TXS6_MPDU_FAIL_CNT);
 		stats->tx_retries +=
 			le32_get_bits(txs_data[7], MT_TXS7_MPDU_RETRY_CNT);
+
+		if (wcid->sta) {
+			struct ieee80211_sta *sta;
+			u8 tid;
+
+			sta = container_of((void *)wcid, struct ieee80211_sta,
+					   drv_priv);
+			tid = FIELD_GET(MT_TXS0_TID, txs);
+
+			ieee80211_refresh_tx_agg_session_timer(sta, tid);
+		}
 	}
 
 	txrate = FIELD_GET(MT_TXS0_TX_RATE, txs);
